@@ -14,9 +14,16 @@ networks:
     driver: bridge
     internal: true # Security hardening: isolated network with no direct host ingress
     name: inventory_backend_net
+  monitoring:
+    driver: bridge
+    name: inventory_monitoring_net
 
 volumes:
   mysql_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
 
 services:
@@ -118,6 +125,7 @@ services:
       - ./nginx/certs:/etc/nginx/certs:ro
     networks:
       - frontend
+      - monitoring
     depends_on:
       - app
       - phpmyadmin
@@ -126,3 +134,74 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+
+  # ----------------------------------------------------------------------------
+  # cAdvisor Container Metrics Exporter
+  # ----------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: inventory_cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "${CADVISOR_PORT:-8081}:8080"
+    networks:
+      - monitoring
+
+  # ----------------------------------------------------------------------------
+  # Prometheus Time Series Metrics Database & Scraper
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: inventory_prometheus
+    restart: unless-stopped
+    user: "nobody" # Hardening: non-root user
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - monitoring
+      - frontend
+    depends_on:
+      - cadvisor
+
+  # ----------------------------------------------------------------------------
+  # Grafana Visual Analytics & Dashboards
+  # ----------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: inventory_grafana
+    restart: unless-stopped
+    user: "472:0" # Hardening: standard grafana non-root UID
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-GrafanaSecurePass2024!}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - monitoring
+      - frontend
+    depends_on:
+      - prometheus

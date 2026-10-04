@@ -1,0 +1,50 @@
+# ==============================================================================
+# Prometheus Configuration - Inventory System Monitoring (Đề 5)
+# ==============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+alerting:
+  alertmanagers: []
+
+rule_files: []
+
+scrape_configs:
+  # 1. Prometheus Self Monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          environment: 'production'
+
+  # 2. cAdvisor Container & Resource Metrics
+  - job_name: 'cadvisor'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          service: 'cadvisor'
+          environment: 'production'
+
+  # 3. Nginx Web & Proxy Metrics (via stub_status)
+  - job_name: 'nginx'
+    metrics_path: '/stub_status'
+    static_configs:
+      - targets: ['nginx:80']
+        labels:
+          service: 'nginx-proxy'
+          environment: 'production'
+
+  # 4. Inventory Web Application Metrics & Health
+  - job_name: 'inventory_app'
+    metrics_path: '/health.php'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['nginx:80']
+        labels:
+          service: 'inventory-web'
+          environment: 'production'
