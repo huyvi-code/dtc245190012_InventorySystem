@@ -1,0 +1,128 @@
+version: '3.8'
+
+# ==============================================================================
+# Inventory Management System (Đề 5) - Docker Compose Architecture
+# DTC245190012
+# Hardening: Network Isolation, Non-root User, Strict Access Controls
+# ==============================================================================
+
+networks:
+  frontend:
+    driver: bridge
+    name: inventory_frontend_net
+  backend:
+    driver: bridge
+    internal: true # Security hardening: isolated network with no direct host ingress
+    name: inventory_backend_net
+
+volumes:
+  mysql_data:
+    driver: local
+
+services:
+  # ----------------------------------------------------------------------------
+  # MySQL Database Service
+  # ----------------------------------------------------------------------------
+  db:
+    image: mariadb:10.11
+    container_name: inventory_db
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-SuperRootSecurePass2024!}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-inventory_db}
+      MYSQL_USER: ${MYSQL_USER:-inventory_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-InventorySecurePass2024!}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+    # Port 3306 is not exposed to host for security hardening
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ----------------------------------------------------------------------------
+  # PHP Web Application (PHP-FPM 8.2)
+  # ----------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: inventory_app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    user: "www-data:www-data" # Hardening: unprivileged user
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-inventory_db}
+      DB_USER: ${MYSQL_USER:-inventory_user}
+      DB_PASS: ${MYSQL_PASSWORD:-InventorySecurePass2024!}
+    volumes:
+      - ./src:/var/www/html:ro
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ----------------------------------------------------------------------------
+  # phpMyAdmin Database Management
+  # ----------------------------------------------------------------------------
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:5.2.1-apache
+    container_name: inventory_phpmyadmin
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: ${MYSQL_USER:-inventory_user}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-InventorySecurePass2024!}
+      UPLOAD_LIMIT: 25M
+      PMA_ABSOLUTE_URI: https://localhost/phpmyadmin/
+    ports:
+      - "${PMA_PORT:-8080}:80"
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ----------------------------------------------------------------------------
+  # Nginx Reverse Proxy with HTTPS & Security Headers
+  # ----------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: inventory_nginx
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${APP_PORT_HTTP:-80}:80"
+      - "${APP_PORT_HTTPS:-443}:443"
+    volumes:
+      - ./src:/var/www/html:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - frontend
+    depends_on:
+      - app
+      - phpmyadmin
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/stub_status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3

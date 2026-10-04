@@ -1,0 +1,25 @@
+# Environment configuration
+.env
+
+# Docker volume data directories
+mysql_data/
+grafana_data/
+prometheus_data/
+loki_data/
+promtail_data/
+
+# Log files
+*.log
+nginx/logs/
+
+# IDE / OS specific files
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Windows specific
+Desktop.ini
+$RECYCLE.BIN/
