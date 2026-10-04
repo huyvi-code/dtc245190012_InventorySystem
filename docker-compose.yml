@@ -1,7 +1,7 @@
 version: '3.8'
 
 # ==============================================================================
-# Inventory Management System (Đề 5) - Docker Compose Architecture
+# Inventory Management System (Đề 5) - Full Docker Compose Stack
 # DTC245190012
 # Hardening: Network Isolation, Non-root User, Strict Access Controls
 # ==============================================================================
@@ -24,6 +24,10 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  nginx_logs:
     driver: local
 
 services:
@@ -65,7 +69,7 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    user: "www-data:www-data" # Hardening: unprivileged user
+    user: "www-data:www-data" # Hardening: unprivileged non-root user
     environment:
       DB_HOST: db
       DB_PORT: 3306
@@ -123,6 +127,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      - nginx_logs:/var/log/nginx
     networks:
       - frontend
       - monitoring
@@ -205,3 +210,42 @@ services:
       - frontend
     depends_on:
       - prometheus
+
+  # ----------------------------------------------------------------------------
+  # Grafana Loki Log Aggregation Engine
+  # ----------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: inventory_loki
+    restart: unless-stopped
+    user: "10001:10001" # Hardening: non-root user
+    security_opt:
+      - no-new-privileges:true
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks:
+      - monitoring
+
+  # ----------------------------------------------------------------------------
+  # Promtail Log Shipper Agent
+  # ----------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: inventory_promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - nginx_logs:/var/log/nginx:ro
+    ports:
+      - "${PROMTAIL_PORT:-9080}:9080"
+    networks:
+      - monitoring
+    depends_on:
+      - loki
